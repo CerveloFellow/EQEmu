@@ -1758,6 +1758,8 @@ struct SPDat_Spell_Struct
 /* 235 */	//bool is_beta_only; // -- IS_BETA_ONLY
 /* 236 */	//int spell_subgroup; // -- SPELL_SUBGROUP
 			uint8 damage_shield_type; // This field does not exist in spells_us.txt
+			int8 permanent_buff;  // Custom: -1=auto, 0=exclude, 1=force permanent
+			int32 player_cast_time;  // Custom: NULL(-1)=auto 1sec cap, 0=no change, >0=override ms
 };
 
 extern const SPDat_Spell_Struct* spells;

@@ -1827,6 +1827,19 @@ void SharedDatabase::LoadSpells(void *data, int max_spells) {
 		sp[tempid].max_distance_mod = Strings::ToFloat(row[230]);
 		sp[tempid].min_range = Strings::ToFloat(row[231]);
 		sp[tempid].no_remove = Strings::ToBool(row[232]);
+		// Load permanent_buff - NULL becomes - 1 for auto - detect
+		if (row[237] != nullptr) {
+			sp[tempid].permanent_buff = static_cast<int8>(Strings::ToInt(row[237]));
+		}
+		else {
+			sp[tempid].permanent_buff = -1;  // NULL = auto-detect
+		}
+		// Load player_cast_time - NULL becomes -1 for auto (1sec cap)
+		if (row[238] != nullptr) {
+			sp[tempid].player_cast_time = static_cast<int32>(Strings::ToInt(row[238]));
+		} else {
+			sp[tempid].player_cast_time = -1;  // NULL = auto
+		}
 		sp[tempid].damage_shield_type = 0;
 	}
 

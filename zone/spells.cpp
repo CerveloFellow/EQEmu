@@ -381,6 +381,16 @@ bool Mob::DoCastSpell(uint16 spell_id, uint16 target_id, CastingSlot slot,
 		if (cast_time) {
 			cast_time = GetActSpellCasttime(spell_id, cast_time);
 		}
+		// Player cast time override
+		if (IsClient()) {
+			int32 pct = spells[spell_id].player_cast_time;
+			if (pct > 0) {
+				cast_time = pct;  // Use override value
+			} else if (pct == -1 && cast_time >= 1000) {
+				cast_time = 1000;  // Auto: cap at 1 second
+			}
+			// pct == 0 means no change
+		}
 	}
 	//must use SPA 415 with focus (SPA 127/500/501) to reduce item recast
 	else if (cast_time && IsOfClientBot() && slot == CastingSlot::Item && item_slot != 0xFFFFFFFF) {
@@ -3733,6 +3743,15 @@ int Mob::AddBuff(Mob *caster, uint16 spell_id, int duration, int32 level_overrid
 		memset(buffs[emptyslot].caster_name, 0, 64);
 	buffs[emptyslot].casterid = caster ? caster->GetID() : 0;
 	buffs[emptyslot].ticsremaining = duration;
+	// Permanent buff system - extend duration for beneficial player buffs
+	if (this->IsClient() && IsBeneficialSpell(spell_id)) {
+		int8 perm_flag = spells[spell_id].permanent_buff;
+
+		// Skip if explicitly excluded (0), otherwise check for force include (1) or auto-detect with duration > 2
+		if (perm_flag != 0 && (perm_flag == 1 || buffs[emptyslot].ticsremaining > 2)) {
+			buffs[emptyslot].ticsremaining = 72000;  // ~20 hours
+		}
+	}
 	buffs[emptyslot].counters = CalculateCounters(spell_id);
 	buffs[emptyslot].hit_number = spells[spell_id].hit_number;
 	buffs[emptyslot].client = caster ? caster->IsClient() : 0;
