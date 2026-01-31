@@ -13271,3 +13271,119 @@ bool Client::UncompleteTask(int task_id)
 
 	return task_state->UncompleteTask(task_id);
 }
+
+bool Client::IsMerchantBag(uint32 item_id) {
+	// Magical Merchant bags are item IDs 147500-147523
+	return (item_id >= 147500 && item_id <= 147523);
+}
+
+void Client::SellMerchantBagContents() {
+	// Check if merchant window is open
+	uint16 merchant_entity_id = GetMerchantSessionEntityID();
+	if (merchant_entity_id == 0) {
+		Message(Chat::Red, "You must have a merchant window open to use this command.");
+		return;
+	}
+
+	// Get the merchant NPC
+	Mob* merchant = entity_list.GetMob(merchant_entity_id);
+	if (!merchant || !merchant->IsNPC()) {
+		Message(Chat::Red, "Invalid merchant.");
+		return;
+	}
+
+	// Track totals
+	uint64 total_value = 0;
+	int items_sold = 0;
+
+	// Iterate through general inventory slots (bags are in slots 23-30 for main inventory)
+	for (int16 bag_slot = EQ::invslot::GENERAL_BEGIN; bag_slot <= EQ::invslot::GENERAL_END; bag_slot++) {
+		const EQ::ItemInstance* bag_inst = m_inv.GetItem(bag_slot);
+
+		if (!bag_inst || !bag_inst->GetItem()) {
+			continue;
+		}
+
+		// Check if this is a merchant bag
+		if (!IsMerchantBag(bag_inst->GetItem()->ID)) {
+			continue;
+		}
+
+		// Calculate bag slot range: each bag slot has 10 sub-slots
+		// Bag slots start at 251 for general slot 23's bag
+		int16 bag_start = EQ::invbag::GENERAL_BAGS_BEGIN + ((bag_slot - EQ::invslot::GENERAL_BEGIN) * EQ::invbag::SLOT_COUNT);
+		int16 bag_end = bag_start + bag_inst->GetItem()->BagSlots - 1;
+
+		// Iterate through bag contents (in reverse to avoid slot shifting issues)
+		for (int16 slot = bag_end; slot >= bag_start; slot--) {
+			const EQ::ItemInstance* item_inst = m_inv.GetItem(slot);
+
+			if (!item_inst || !item_inst->GetItem()) {
+				continue;
+			}
+
+			const EQ::ItemData* item = item_inst->GetItem();
+
+			// Skip NO DROP items (NoDrop == 0 means it IS no-drop in EQEmu)
+			if (item->NoDrop == 0) {
+				continue;
+			}
+
+			// Skip items with no value
+			if (item->Price == 0) {
+				continue;
+			}
+
+			// Calculate sell price (use merchant sell modifier)
+			uint32 sell_price = (uint32)(item->Price * RuleR(Merchant, SellCostMod));
+
+			// For stackable items, multiply by quantity
+			int quantity = item_inst->IsStackable() ? item_inst->GetCharges() : 1;
+			if (quantity < 1) {
+				quantity = 1;
+			}
+			uint32 item_total = sell_price * quantity;
+
+			// Delete the item from inventory
+			DeleteItemInInventory(slot, quantity, true);
+
+			// Add to total
+			total_value += item_total;
+			items_sold++;
+		}
+	}
+
+	if (items_sold == 0) {
+		Message(Chat::Yellow, "No sellable items found in your Magical Merchant bags.");
+		return;
+	}
+
+	// Add money to player
+	AddMoneyToPP(total_value, true);
+
+	// Calculate coin breakdown for message
+	uint32 plat = total_value / 1000;
+	uint32 remainder = total_value % 1000;
+	uint32 gold = remainder / 100;
+	remainder = remainder % 100;
+	uint32 silver = remainder / 10;
+	uint32 copper = remainder % 10;
+
+	// Send confirmation message
+	if (plat > 0) {
+		Message(Chat::Green, "You sold %d item(s) for %up %ug %us %uc.",
+			items_sold, plat, gold, silver, copper);
+	}
+	else if (gold > 0) {
+		Message(Chat::Green, "You sold %d item(s) for %ug %us %uc.",
+			items_sold, gold, silver, copper);
+	}
+	else if (silver > 0) {
+		Message(Chat::Green, "You sold %d item(s) for %us %uc.",
+			items_sold, silver, copper);
+	}
+	else {
+		Message(Chat::Green, "You sold %d item(s) for %uc.",
+			items_sold, copper);
+	}
+}

@@ -3746,9 +3746,8 @@ int Mob::AddBuff(Mob *caster, uint16 spell_id, int duration, int32 level_overrid
 	// Permanent buff system - extend duration for beneficial player buffs
 	if (this->IsClient() && IsBeneficialSpell(spell_id)) {
 		int8 perm_flag = spells[spell_id].permanent_buff;
-
-		// Skip if explicitly excluded (0), otherwise check for force include (1) or auto-detect with duration > 2
-		if (perm_flag != 0 && (perm_flag == 1 || buffs[emptyslot].ticsremaining > 2)) {
+		// Skip if explicitly excluded (0), otherwise check for force include (1), bard songs, or auto-detect with duration > 2
+		if (perm_flag != 0 && (perm_flag == 1 || IsBardSong(spell_id) || buffs[emptyslot].ticsremaining > 2)) {
 			buffs[emptyslot].ticsremaining = 72000;  // ~20 hours
 		}
 	}

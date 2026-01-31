@@ -155,6 +155,7 @@ int command_init(void)
 		command_add("load_shared_memory", "[shared_memory_name] - Reloads shared memory and uses the input as output", AccountStatus::GMImpossible, command_load_shared_memory) ||
 		command_add("loc", "Print out your or your target's current location and heading", AccountStatus::Player, command_loc) ||
 		command_add("logs", "Manage anything to do with logs", AccountStatus::GMImpossible, command_logs) ||
+		command_add("lootcorpses", "[radius=150] [zradius=30] [notrade=0] [destroy=0] - Loot all nearby corpses", AccountStatus::Player, command_lootcorpses) ||
 		command_add("makepet", "[Pet Name] - Make a pet", AccountStatus::Guide, command_makepet) ||
 		command_add("memspell", "[Spell ID] [Spell Gem] - Memorize a Spell by ID to the specified Spell Gem for you or your target", AccountStatus::Guide, command_memspell) ||
 		command_add("merchantshop", "Closes or opens your target merchant's shop", AccountStatus::GMAdmin, command_merchantshop) ||
@@ -205,6 +206,7 @@ int command_init(void)
 		command_add("scribespells", "[Max level] [Min level] - Scribe all spells for you or your player target that are usable by them, up to level specified. (may freeze client for a few seconds)", AccountStatus::GMLeadAdmin, command_scribespells) ||
 		command_add("sendzonespawns", "Refresh spawn list for all clients in zone", AccountStatus::GMLeadAdmin, command_sendzonespawns) ||
 		command_add("sensetrap", "Analog for ldon sense trap for the newer clients since we still don't have it working.", AccountStatus::Player, command_sensetrap) ||
+		command_add("sellmerchantbag", "Sells all items from Magical Merchant bags to open merchant", AccountStatus::Player, command_sellall) ||
 		command_add("serverrules", "Show server rules", AccountStatus::Player, command_serverrules) ||
 		command_add("set", "Set command used to set various things", AccountStatus::Guide, command_set) ||
 		command_add("show", "Show command used to show various things", AccountStatus::Guide, command_show) ||
@@ -775,5 +777,271 @@ void command_bot(Client *c, const Seperator *sep)
 		}
 	} else {
 		c->Message(Chat::Red, "Bots are disabled on this server.");
+	}
+}
+
+void command_sellall(Client* c, const Seperator* sep) {
+	c->SellMerchantBagContents();
+}
+
+void command_lootcorpses(Client* c, const Seperator* sep)
+{
+	// Default values
+	float radius = 150.0f;
+	float zradius = 30.0f;
+	bool loot_notrade = false;
+	bool destroy_corpses = false;
+
+	// Maximum allowed values
+	const float MAX_RADIUS = 500.0f;
+	const float MAX_ZRADIUS = 50.0f;
+
+	// Parse named parameters (e.g., radius=300 notrade=1 destroy=1)
+	for (int i = 1; i <= sep->argnum; i++) {
+		std::string arg = sep->arg[i];
+
+		// Skip empty arguments
+		if (arg.empty()) {
+			continue;
+		}
+
+		// Find the '=' delimiter
+		size_t eq_pos = arg.find('=');
+		if (eq_pos == std::string::npos) {
+			c->Message(Chat::Red, "Invalid parameter format: %s (expected name=value)", arg.c_str());
+			c->Message(Chat::Yellow, "Usage: #lootcorpses [radius=150] [zradius=30] [notrade=0] [destroy=0]");
+			return;
+		}
+
+		std::string param_name = arg.substr(0, eq_pos);
+		std::string param_value = arg.substr(eq_pos + 1);
+
+		// Convert param name to lowercase for case-insensitive matching
+		std::transform(param_name.begin(), param_name.end(), param_name.begin(), ::tolower);
+
+		if (param_name == "radius") {
+			radius = std::stof(param_value);
+		}
+		else if (param_name == "zradius") {
+			zradius = std::stof(param_value);
+		}
+		else if (param_name == "notrade") {
+			loot_notrade = (param_value == "1" || param_value == "true");
+		}
+		else if (param_name == "destroy") {
+			destroy_corpses = (param_value == "1" || param_value == "true");
+		}
+		else {
+			c->Message(Chat::Red, "Unknown parameter: %s", param_name.c_str());
+			c->Message(Chat::Yellow, "Valid parameters: radius, zradius, notrade, destroy");
+			return;
+		}
+	}
+
+	// Clamp to maximum allowed values
+	if (radius > MAX_RADIUS) {
+		radius = MAX_RADIUS;
+		c->Message(Chat::Yellow, "Radius capped to maximum of %.0f", MAX_RADIUS);
+	}
+	if (radius < 0) {
+		radius = 150.0f;
+	}
+
+	if (zradius > MAX_ZRADIUS) {
+		zradius = MAX_ZRADIUS;
+		c->Message(Chat::Yellow, "Z-Radius capped to maximum of %.0f", MAX_ZRADIUS);
+	}
+	if (zradius < 0) {
+		zradius = 30.0f;
+	}
+
+	// Tracking variables
+	int total_items_looted = 0;
+	uint32 total_copper = 0;
+	uint32 total_silver = 0;
+	uint32 total_gold = 0;
+	uint32 total_platinum = 0;
+	int corpses_processed = 0;
+	int corpses_destroyed = 0;
+	bool inventory_full_warning = false;
+
+	// Get all corpses in the zone
+	std::list<Corpse*> corpse_list;
+	entity_list.GetCorpseList(corpse_list);
+
+	// Process each corpse
+	for (auto corpse : corpse_list) {
+		// Skip player corpses - only loot NPC corpses
+		if (corpse->IsPlayerCorpse()) {
+			continue;
+		}
+
+		// Calculate distance
+		float dist_x = c->GetX() - corpse->GetX();
+		float dist_y = c->GetY() - corpse->GetY();
+		float dist_z = c->GetZ() - corpse->GetZ();
+		float horizontal_dist = std::sqrt(dist_x * dist_x + dist_y * dist_y);
+		float vertical_dist = std::abs(dist_z);
+
+		// Skip if not in range
+		if (horizontal_dist > radius || vertical_dist > zradius) {
+			continue;
+		}
+
+		// Skip if not allowed to loot this corpse
+		if (!corpse->CanPlayerLoot(c->CharacterID())) {
+			continue;
+		}
+
+		corpses_processed++;
+		bool ran_out_of_space_on_this_corpse = false;
+
+		// Loot coins first (always room for coins - they go to currency, not inventory)
+		uint32 copper = corpse->GetCopper();
+		uint32 silver = corpse->GetSilver();
+		uint32 gold = corpse->GetGold();
+		uint32 platinum = corpse->GetPlatinum();
+
+		if (copper || silver || gold || platinum) {
+			c->AddMoneyToPP(copper, silver, gold, platinum, true);
+			corpse->RemoveCash();
+			total_copper += copper;
+			total_silver += silver;
+			total_gold += gold;
+			total_platinum += platinum;
+		}
+
+		// Get the loot item list and iterate through it
+		// We need to make a copy of the list since we'll be modifying it
+		LootItems loot_list = corpse->GetLootItems();
+
+		for (auto loot_item : loot_list) {
+			if (!loot_item || loot_item->item_id == 0) {
+				continue;
+			}
+
+			// Get item data from database
+			const EQ::ItemData* item_data = database.GetItem(loot_item->item_id);
+			if (!item_data) {
+				continue;
+			}
+
+			// --- SKIP CHECKS ---
+
+			// Skip no-trade items unless flag is set
+			if (item_data->NoDrop == 0 && !loot_notrade) {
+				continue;
+			}
+
+			// Skip lore items if player already has one
+			if (c->CheckLoreConflict(item_data)) {
+				continue;
+			}
+
+			// --- CREATE ITEM AND TRANSFER ---
+
+			// Create item instance with all properties from corpse loot
+			EQ::ItemInstance* inst = database.CreateItem(
+				loot_item->item_id,
+				loot_item->charges,
+				loot_item->aug_1,
+				loot_item->aug_2,
+				loot_item->aug_3,
+				loot_item->aug_4,
+				loot_item->aug_5,
+				loot_item->aug_6,
+				loot_item->attuned,
+				loot_item->custom_data,
+				loot_item->ornamenticon,
+				loot_item->ornamentidfile,
+				loot_item->ornament_hero_model
+			);
+
+			if (!inst) {
+				continue;
+			}
+
+			// Try to put item in inventory (handles stacking automatically)
+			if (c->PutItemInInventoryWithStacking(inst)) {
+				// Successfully looted - remove from corpse
+				corpse->RemoveItem(loot_item);
+				total_items_looted++;
+			}
+			else {
+				// No space for this item
+				ran_out_of_space_on_this_corpse = true;
+				inventory_full_warning = true;
+			}
+
+			// Clean up the temporary instance
+			safe_delete(inst);
+		}
+
+		// Corpse destruction logic:
+		// Only destroy if destroy flag is on AND we didn't run out of inventory space
+		if (destroy_corpses && !ran_out_of_space_on_this_corpse) {
+			corpse->DepopNPCCorpse();
+			corpses_destroyed++;
+		}
+	}
+
+	// Send summary message(s)
+	if (corpses_processed == 0) {
+		c->Message(Chat::Yellow, "No lootable corpses found within range.");
+		return;
+	}
+
+	// Build summary message
+	std::string msg = fmt::format("Looted {} corpse{}: {} item{}",
+		corpses_processed,
+		corpses_processed == 1 ? "" : "s",
+		total_items_looted,
+		total_items_looted == 1 ? "" : "s"
+	);
+
+	// Add coin summary if any coins were looted
+	uint64 total_coin_value = total_copper + (total_silver * 10) + (total_gold * 100) + (total_platinum * 1000);
+	if (total_coin_value > 0) {
+		// Convert to readable format
+		uint32 plat_display = total_coin_value / 1000;
+		uint32 gold_display = (total_coin_value % 1000) / 100;
+		uint32 silver_display = (total_coin_value % 100) / 10;
+		uint32 copper_display = total_coin_value % 10;
+
+		std::string coin_str;
+		if (plat_display > 0) {
+			coin_str += fmt::format("{}p ", plat_display);
+		}
+		if (gold_display > 0) {
+			coin_str += fmt::format("{}g ", gold_display);
+		}
+		if (silver_display > 0) {
+			coin_str += fmt::format("{}s ", silver_display);
+		}
+		if (copper_display > 0) {
+			coin_str += fmt::format("{}c", copper_display);
+		}
+
+		// Trim trailing space if present
+		if (!coin_str.empty() && coin_str.back() == ' ') {
+			coin_str.pop_back();
+		}
+
+		msg += fmt::format(", {}", coin_str);
+	}
+
+	// Add corpse destruction count if applicable
+	if (destroy_corpses && corpses_destroyed > 0) {
+		msg += fmt::format(", {} corpse{} removed",
+			corpses_destroyed,
+			corpses_destroyed == 1 ? "" : "s"
+		);
+	}
+
+	c->Message(Chat::Green, "%s", msg.c_str());
+
+	// Send inventory full warning if applicable
+	if (inventory_full_warning) {
+		c->Message(Chat::Yellow, "Some items could not be looted due to insufficient inventory space.");
 	}
 }

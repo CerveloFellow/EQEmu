@@ -257,6 +257,9 @@ public:
 	void ReconnectUCS();
 	void RecordStats();
 
+	void SellMerchantBagContents();
+	bool IsMerchantBag(uint32 item_id);
+
 	void SetDisplayMobInfoWindow(bool display_mob_info_window);
 	bool GetDisplayMobInfoWindow() const;
 
