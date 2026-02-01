@@ -1,21 +1,73 @@
 #include "zone/client.h"
 
-void command_goto(Client *c, const Seperator *sep)
+void command_goto(Client* c, const Seperator* sep)
 {
 	const uint16 arguments = sep->argnum;
 
-	const bool goto_player   = arguments > 0 && !sep->IsNumber(1);
+	// Check for "id" keyword as first argument
+	const bool goto_spawn_id = arguments > 0 && strcasecmp(sep->arg[1], "id") == 0 && arguments > 1;
+	const bool goto_player = arguments > 0 && !sep->IsNumber(1) && !goto_spawn_id;
 	const bool goto_position = sep->IsNumber(1) && sep->IsNumber(2) && sep->IsNumber(3);
-	const bool goto_target   = !arguments && c->GetTarget();
+	const bool goto_target = !arguments && c->GetTarget();
 
-	if (!goto_player && !goto_position && !goto_target) {
+	if (!goto_spawn_id && !goto_player && !goto_position && !goto_target) {
 		c->Message(Chat::White, "Usage: #goto [x y z] [h]");
 		c->Message(Chat::White, "Usage: #goto [player_name]");
+		c->Message(Chat::White, "Usage: #goto id [spawn_id]");
 		c->Message(Chat::White, "Usage: #goto (Target required)");
 		return;
 	}
 
-	if (goto_player) {
+	if (goto_spawn_id) {
+		// Parse spawn ID from second argument
+		uint32 spawn_id = 0;
+
+#ifdef _WIN32
+		// Windows: use std::stoul
+		try {
+			spawn_id = static_cast<uint32>(std::stoul(sep->arg[2]));
+		}
+		catch (...) {
+			c->Message(Chat::White, "Invalid spawn ID. Usage: #goto id [spawn_id]");
+			return;
+		}
+#else
+		// Linux/Unix: use atoul
+		spawn_id = atoul(sep->arg[2]);
+#endif
+
+		if (spawn_id == 0) {
+			c->Message(Chat::White, "Invalid spawn ID. Usage: #goto id [spawn_id]");
+			return;
+		}
+
+		// Look up the mob by spawn ID
+		Mob* target_mob = entity_list.GetMobID(spawn_id);
+		if (!target_mob) {
+			c->Message(Chat::White, "Spawn ID %u could not be found in this zone.", spawn_id);
+			return;
+		}
+
+		// Teleport to the mob's location
+		c->MovePC(
+			zone->GetZoneID(),
+			zone->GetInstanceID(),
+			target_mob->GetX(),
+			target_mob->GetY(),
+			target_mob->GetZ(),
+			target_mob->GetHeading()
+		);
+
+		c->Message(
+			Chat::White,
+			fmt::format(
+				"Going to {} (ID: {}) in the same zone.",
+				target_mob->GetName(),
+				spawn_id
+			).c_str()
+		);
+	}
+	else if (goto_player) {
 		const std::string& name = sep->arg[1];
 		Client* t = entity_list.GetClientByName(name.c_str());
 		if (t) {
@@ -35,7 +87,8 @@ void command_goto(Client *c, const Seperator *sep)
 					name
 				).c_str()
 			);
-		} else if (c->GotoPlayer(name)) {
+		}
+		else if (c->GotoPlayer(name)) {
 			c->Message(
 				Chat::White,
 				fmt::format(
@@ -43,7 +96,8 @@ void command_goto(Client *c, const Seperator *sep)
 					name
 				).c_str()
 			);
-		} else {
+		}
+		else {
 			c->Message(
 				Chat::White,
 				fmt::format(
@@ -52,7 +106,8 @@ void command_goto(Client *c, const Seperator *sep)
 				).c_str()
 			);
 		}
-	} else if (goto_position) {
+	}
+	else if (goto_position) {
 		const glm::vec4& position = glm::vec4(
 			Strings::ToFloat(sep->arg[1]),
 			Strings::ToFloat(sep->arg[2]),
@@ -67,7 +122,8 @@ void command_goto(Client *c, const Seperator *sep)
 			position.z,
 			position.w
 		);
-	} else if (goto_target) {
+	}
+	else if (goto_target) {
 		Mob* t = c->GetTarget();
 
 		c->MovePC(
@@ -88,4 +144,3 @@ void command_goto(Client *c, const Seperator *sep)
 		);
 	}
 }
-

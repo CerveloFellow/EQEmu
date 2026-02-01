@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cstring>
 #include <thread>
+#include <regex>
 
 extern QueryServ* QServ;
 extern WorldServer worldserver;
@@ -134,7 +135,7 @@ int command_init(void)
 		command_add("giveitem", "[itemid] [charges] - Summon an item onto your target's cursor. Charges are optional.", AccountStatus::GMMgmt, command_giveitem) ||
 		command_add("givemoney", "[Platinum] [Gold] [Silver] [Copper] - Gives specified amount of money to you or your player target", AccountStatus::GMMgmt, command_givemoney) ||
 		command_add("gmzone", "[Zone ID|Zone Short Name] [Version] [Instance Identifier] - Zones to a private GM instance (Version defaults to 0 and Instance Identifier defaults to 'gmzone' if not used)", AccountStatus::GMAdmin, command_gmzone) ||
-		command_add("goto", "[playername] or [x y z] [h] - Teleport to the provided coordinates or to your target", AccountStatus::Steward, command_goto) ||
+		command_add("goto", "[playername] or [x y z] [h] or [id] - Teleport to the provided coordinates or to your target", AccountStatus::Steward, command_goto) ||
 		command_add("grantaa", "[level] - Grants a player all available AA points up the specified level, all AAs are granted if no level is specified.", AccountStatus::GMMgmt, command_grantaa) ||
 		command_add("grid", "[add/delete] [grid_num] [wandertype] [pausetype] - Create/delete a wandering grid", AccountStatus::GMAreas, command_grid) ||
 		command_add("guild", "Guild manipulation commands. Use argument help for more info.", AccountStatus::Steward, command_guild) ||
@@ -155,7 +156,7 @@ int command_init(void)
 		command_add("load_shared_memory", "[shared_memory_name] - Reloads shared memory and uses the input as output", AccountStatus::GMImpossible, command_load_shared_memory) ||
 		command_add("loc", "Print out your or your target's current location and heading", AccountStatus::Player, command_loc) ||
 		command_add("logs", "Manage anything to do with logs", AccountStatus::GMImpossible, command_logs) ||
-		command_add("lootcorpses", "[radius=150] [zradius=30] [notrade=0] [destroy=0] - Loot all nearby corpses", AccountStatus::Player, command_lootcorpses) ||
+		command_add("lootcorpses", "[radius=150] [zradius=30] [notrade=0] [destroy=0] [find=\"pattern\"] - Loot all nearby corpses", AccountStatus::Player, command_lootcorpses) ||
 		command_add("makepet", "[Pet Name] - Make a pet", AccountStatus::Guide, command_makepet) ||
 		command_add("memspell", "[Spell ID] [Spell Gem] - Memorize a Spell by ID to the specified Spell Gem for you or your target", AccountStatus::Guide, command_memspell) ||
 		command_add("merchantshop", "Closes or opens your target merchant's shop", AccountStatus::GMAdmin, command_merchantshop) ||
@@ -791,6 +792,7 @@ void command_lootcorpses(Client* c, const Seperator* sep)
 	float zradius = 30.0f;
 	bool loot_notrade = false;
 	bool destroy_corpses = false;
+	std::string find_pattern = "";
 
 	// Maximum allowed values
 	const float MAX_RADIUS = 500.0f;
@@ -809,7 +811,7 @@ void command_lootcorpses(Client* c, const Seperator* sep)
 		size_t eq_pos = arg.find('=');
 		if (eq_pos == std::string::npos) {
 			c->Message(Chat::Red, "Invalid parameter format: %s (expected name=value)", arg.c_str());
-			c->Message(Chat::Yellow, "Usage: #lootcorpses [radius=150] [zradius=30] [notrade=0] [destroy=0]");
+			c->Message(Chat::Yellow, "Usage: #lootcorpses [radius=150] [zradius=30] [notrade=0] [destroy=0] [find=\"regex pattern\"]");
 			return;
 		}
 
@@ -831,9 +833,16 @@ void command_lootcorpses(Client* c, const Seperator* sep)
 		else if (param_name == "destroy") {
 			destroy_corpses = (param_value == "1" || param_value == "true");
 		}
+		else if (param_name == "find") {
+			find_pattern = param_value;
+			// Strip surrounding quotes if present
+			if (find_pattern.length() >= 2 && find_pattern.front() == '"' && find_pattern.back() == '"') {
+				find_pattern = find_pattern.substr(1, find_pattern.length() - 2);
+			}
+		}
 		else {
 			c->Message(Chat::Red, "Unknown parameter: %s", param_name.c_str());
-			c->Message(Chat::Yellow, "Valid parameters: radius, zradius, notrade, destroy");
+			c->Message(Chat::Yellow, "Valid parameters: radius, zradius, notrade, destroy, find");
 			return;
 		}
 	}
@@ -853,6 +862,20 @@ void command_lootcorpses(Client* c, const Seperator* sep)
 	}
 	if (zradius < 0) {
 		zradius = 30.0f;
+	}
+
+	// Validate regex pattern if provided
+	std::regex item_regex;
+	bool use_regex = false;
+	if (!find_pattern.empty()) {
+		try {
+			item_regex = std::regex(find_pattern, std::regex_constants::icase);  // case-insensitive
+			use_regex = true;
+		}
+		catch (const std::regex_error& e) {
+			c->Message(Chat::Red, "Invalid regex pattern: %s", e.what());
+			return;
+		}
 	}
 
 	// Tracking variables
@@ -938,8 +961,14 @@ void command_lootcorpses(Client* c, const Seperator* sep)
 				continue;
 			}
 
-			// --- CREATE ITEM AND TRANSFER ---
+			// Skip items that don't match the find pattern (if specified)
+			if (use_regex) {
+				if (!std::regex_search(item_data->Name, item_regex)) {
+					continue;
+				}
+			}
 
+			// --- CREATE ITEM AND TRANSFER ---
 			// Create item instance with all properties from corpse loot
 			EQ::ItemInstance* inst = database.CreateItem(
 				loot_item->item_id,
