@@ -22,7 +22,7 @@ void command_goto(Client* c, const Seperator* sep)
 		// Parse spawn ID from second argument
 		uint32 spawn_id = 0;
 
-try {
+		try {
 			spawn_id = static_cast<uint32>(std::stoul(sep->arg[2]));
 		}
 		catch (...) {
