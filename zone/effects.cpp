@@ -759,9 +759,18 @@ bool Client::MemorizeSpellFromItem(uint32 item_id) {
 		return false;
 	}
 
-	const auto class_bit = static_cast<uint32>(1 << (GetClass() - 1));
+	// Check if any of the player's classes can use this scroll (multiclass support)
+	bool can_use_item = false;
+	std::vector<uint8> all_classes = GetAllClasses();
+	for (uint8 class_id : all_classes) {
+		const auto class_bit = static_cast<uint32>(1 << (class_id - 1));
+		if (item->Classes & class_bit) {
+			can_use_item = true;
+			break;
+		}
+	}
 
-	if (!(item->Classes & class_bit)) {
+	if (!can_use_item) {
 		Message(Chat::Red, "Your class cannot learn from this scroll.");
 		SummonItem(item_id);
 		return false;
@@ -773,16 +782,28 @@ bool Client::MemorizeSpellFromItem(uint32 item_id) {
 		return false;
 	}
 
+	// Check if any of the player's classes can use this spell at their current level
 	const auto& spell = spells[spell_id];
-	const auto level_to_use = spell.classes[GetClass() - 1];
-	if (level_to_use == 255) {
-		Message(Chat::Red, "Your class cannot learn from this scroll.");
-		SummonItem(item_id);
-		return false;
+	bool can_use_spell = false;
+	uint8 min_level_required = 255;
+	
+	for (uint8 class_id : all_classes) {
+		uint8 spell_level = spell.classes[class_id - 1];
+		if (spell_level <= GetLevel() && spell_level < 255) {
+			can_use_spell = true;
+			break;
+		}
+		if (spell_level < min_level_required) {
+			min_level_required = spell_level;
+		}
 	}
 
-	if (level_to_use > GetLevel()) {
-		Message(Chat::Red, fmt::format("You must be at least level {} to learn this spell.", level_to_use).c_str());
+	if (!can_use_spell) {
+		if (min_level_required == 255) {
+			Message(Chat::Red, "Your class cannot learn from this scroll.");
+		} else {
+			Message(Chat::Red, fmt::format("You must be at least level {} to learn this spell.", min_level_required).c_str());
+		}
 		SummonItem(item_id);
 		return false;
 	}
@@ -883,17 +904,29 @@ bool Client::UseDiscipline(uint32 spell_id, uint32 target) {
 		return false;
 	}
 
-	//can we use the spell?
+	//can we use the spell? Check all classes for multiclass support
 	const SPDat_Spell_Struct &spell = spells[spell_id];
-	uint8 level_to_use = spell.classes[GetClass() - 1];
-	if(level_to_use == 255) {
-		Message(Chat::Red, "Your class cannot learn from this tome.");
-		//should summon them a new one...
-		return false;
+	bool can_use_discipline = false;
+	uint8 min_level_required = 255;
+	
+	std::vector<uint8> all_classes = GetAllClasses();
+	for (uint8 class_id : all_classes) {
+		uint8 spell_level = spell.classes[class_id - 1];
+		if (spell_level <= GetLevel() && spell_level < 255) {
+			can_use_discipline = true;
+			break;
+		}
+		if (spell_level < min_level_required) {
+			min_level_required = spell_level;
+		}
 	}
-
-	if(level_to_use > GetLevel()) {
-		MessageString(Chat::Red, DISC_LEVEL_USE_ERROR);
+	
+	if (!can_use_discipline) {
+		if (min_level_required == 255) {
+			Message(Chat::Red, "Your class cannot learn from this tome.");
+		} else {
+			MessageString(Chat::Red, DISC_LEVEL_USE_ERROR);
+		}
 		//should summon them a new one...
 		return false;
 	}

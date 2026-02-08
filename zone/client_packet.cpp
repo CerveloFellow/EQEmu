@@ -1005,11 +1005,16 @@ void Client::CompleteConnect()
 		m_last_seen_mob_position[mob.second->GetID()] = mob.second->GetPosition();
 	}
 
+	// Load and send multiclass data to client
+	LoadMulticlassData();
+	SendEdgeStats();
+
 	// enforce some rules..
 	if (!CanEnterZone()) {
 		LogInfo("Kicking character [{}] from zone, not allowed here (missing requirements)", GetCleanName());
 		GoToBind();
 		return;
+
 	}
 }
 
@@ -15801,6 +15806,7 @@ void Client::Handle_OP_Translocate(const EQApplicationPacket *app)
 				PendingTranslocate = false;
 				GoToBind();
 				return;
+
 			}
 
 			entity_list.ClearAggro(this);

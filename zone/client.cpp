@@ -17,6 +17,7 @@
 */
 
 #include "client.h"
+#include "../common/edge_stats.h"
 
 #include "common/data_bucket.h"
 #include "common/data_verification.h"
@@ -3184,7 +3185,13 @@ bool Client::CanHaveSkill(EQ::skills::SkillType skill_id) const
 		skill_id = EQ::skills::Skill2HPiercing;
 	}
 
-	return SkillCaps::Instance()->GetSkillCap(GetClass(), skill_id, RuleI(Character, MaxLevel)).cap > 0;
+	// TGUE: Check all classes (primary + multiclass) for the skill
+	for (uint8 class_id : GetAllClasses()) {
+		if (SkillCaps::Instance()->GetSkillCap(class_id, skill_id, RuleI(Character, MaxLevel)).cap > 0) {
+			return true;
+		}
+	}
+	return false;
 }
 
 uint16 Client::MaxSkill(EQ::skills::SkillType skill_id, uint8 class_id, uint8 level) const
@@ -3198,6 +3205,20 @@ uint16 Client::MaxSkill(EQ::skills::SkillType skill_id, uint8 class_id, uint8 le
 	}
 
 	return SkillCaps::Instance()->GetSkillCap(class_id, skill_id, level).cap;
+}
+
+// TGUE: Multiclass-aware single-param MaxSkill — returns highest cap across all classes
+uint16 Client::MaxSkill(EQ::skills::SkillType skill_id) const
+{
+	uint16 best = 0;
+	uint8 level = GetLevel();
+	for (uint8 class_id : GetAllClasses()) {
+		uint16 cap = MaxSkill(skill_id, class_id, level);
+		if (cap > best) {
+			best = cap;
+		}
+	}
+	return best;
 }
 
 uint8 Client::GetSkillTrainLevel(EQ::skills::SkillType skill_id, uint8 class_id)
@@ -13387,3 +13408,392 @@ void Client::SellMerchantBagContents() {
 			items_sold, copper);
 	}
 }
+
+// ============================================================================
+// MULTICLASS SYSTEM IMPLEMENTATION
+// ============================================================================
+
+void Client::LoadMulticlassData()
+{
+	m_multiclass_ids.clear();
+
+	// This will show in the server console window
+	LogInfo("LoadMulticlassData() called for character [{}]", GetName());
+
+	if (!RuleB(MultiClass, MultiClassEnabled)) {
+		LogInfo("MultiClass is DISABLED by rule");
+		return;
+	}
+
+	// Debug message for testing
+	Message(Chat::Yellow, "DEBUG: LoadMulticlassData called");
+
+	if (!RuleB(MultiClass, MultiClassEnabled)) {
+		Message(Chat::Yellow, "DEBUG: MultiClass is disabled");
+		return;
+	}
+
+	std::string query = fmt::format(
+		"SELECT class_id FROM character_multiclass WHERE character_id = {} ORDER BY date_added ASC",
+		CharacterID()
+	);
+
+	auto results = database.QueryDatabase(query);
+	if (!results.Success()) {
+		Message(Chat::Red, "DEBUG: Query failed");
+		LogError("Failed to load multiclass data for character [{}]: {}",
+			GetName(), results.ErrorMessage());
+		return;
+	}
+
+	for (auto row = results.begin(); row != results.end(); ++row) {
+		uint8 class_id = static_cast<uint8>(Strings::ToInt(row[0]));
+		if (class_id > 0 && class_id <= Class::PLAYER_CLASS_COUNT) {
+			m_multiclass_ids.push_back(class_id);
+		}
+	}
+
+	Message(Chat::Yellow, "DEBUG: Loaded %d additional classes", (int)m_multiclass_ids.size());
+
+	LogInfo("Loaded [{}] additional classes for character [{}]",
+		m_multiclass_ids.size(), GetName());
+}
+
+bool Client::HasClass(uint8 class_id) const
+{
+	if (GetClass() == class_id) {
+		return true;
+	}
+
+	if (!RuleB(MultiClass, MultiClassEnabled)) {
+		return false;
+	}
+
+	return std::find(m_multiclass_ids.begin(), m_multiclass_ids.end(), class_id)
+		!= m_multiclass_ids.end();
+}
+
+std::vector<uint8> Client::GetAllClasses() const
+{
+	std::vector<uint8> all_classes;
+	all_classes.push_back(GetClass());
+
+	if (!RuleB(MultiClass, MultiClassEnabled)) {
+		return all_classes;
+	}
+
+	for (uint8 class_id : m_multiclass_ids) {
+		all_classes.push_back(class_id);
+	}
+
+	return all_classes;
+}
+
+uint8 Client::GetClassCount() const
+{
+	if (!RuleB(MultiClass, MultiClassEnabled)) {
+		return 1;
+	}
+
+	return 1 + static_cast<uint8>(m_multiclass_ids.size());
+}
+
+bool Client::AddMulticlass(uint8 class_id)
+{
+	if (!RuleB(MultiClass, MultiClassEnabled)) {
+		Message(Chat::Red, "Multiclassing is not enabled on this server.");
+		return false;
+	}
+
+	if (class_id < 1 || class_id > Class::PLAYER_CLASS_COUNT) {
+		Message(Chat::Red, "Invalid class.");
+		return false;
+	}
+
+	if (HasClass(class_id)) {
+		Message(Chat::Red, "You already have this class.");
+		return false;
+	}
+
+	int max_classes = RuleI(MultiClass, MaxClasses);
+	if (GetClassCount() >= max_classes) {
+		Message(Chat::Red, "You have reached the maximum number of classes (%d).", max_classes);
+		return false;
+	}
+
+	std::string query = fmt::format(
+		"INSERT INTO character_multiclass (character_id, class_id) VALUES ({}, {})",
+		CharacterID(), class_id
+	);
+
+	auto results = database.QueryDatabase(query);
+	if (!results.Success()) {
+		Message(Chat::Red, "Failed to add class. Please try again.");
+		LogError("Failed to add multiclass [{}] for character [{}]: {}",
+			class_id, GetName(), results.ErrorMessage());
+		return false;
+	}
+
+	m_multiclass_ids.push_back(class_id);
+
+	uint8 current_level = GetLevel();
+
+	Message(Chat::Yellow, "You begin to feel new knowledge flowing into your mind...");
+
+	ScribeSpellsForClass(class_id, 1, current_level);
+	LearnDisciplinesForClass(class_id, 1, current_level);
+	MaxSkillsForClass(class_id);
+	CalcBonuses();
+
+	const char* class_name = GetClassIDName(class_id);
+	Message(Chat::Yellow, "You have gained the abilities of a %s!", class_name);
+
+	LogInfo("Character [{}] added multiclass [{}] ({})",
+		GetName(), class_id, class_name);
+
+	return true;
+}
+
+void Client::ScribeSpellsForClass(uint8 class_id, uint8 min_level, uint8 max_level)
+{
+	auto available_book_slot = GetNextAvailableSpellBookSlot();
+	uint16 scribed_spells = 0;
+
+	for (uint16 spell_id = 0; spell_id < SPDAT_RECORDS; ++spell_id) {
+		if (!IsValidSpell(spell_id)) {
+			continue;
+		}
+
+		if (IsDiscipline(spell_id)) {
+			continue;
+		}
+
+		if (spells[spell_id].classes[class_id - 1] == 0) {
+			continue;
+		}
+
+		uint8 spell_level = spells[spell_id].classes[class_id - 1];
+		if (spell_level > max_level || spell_level < min_level) {
+			continue;
+		}
+
+		if (spells[spell_id].skill == EQ::skills::SkillTigerClaw) {
+			continue;
+		}
+
+		if (RuleB(Spells, UseCHAScribeHack) && spells[spell_id].effect_id[EFFECT_COUNT - 1] == SpellEffect::CHA) {
+			continue;
+		}
+
+		if (HasSpellScribed(spell_id)) {
+			continue;
+		}
+
+		if (RuleB(Spells, EnableSpellGlobals) && !SpellGlobalCheck(spell_id, CharacterID())) {
+			continue;
+		}
+		if (RuleB(Spells, EnableSpellBuckets) && !SpellBucketCheck(spell_id, CharacterID())) {
+			continue;
+		}
+
+		if (available_book_slot == -1) {
+			Message(Chat::Red, "Your spell book is full!");
+			break;
+		}
+
+		ScribeSpell(spell_id, available_book_slot, true, true);
+		available_book_slot = GetNextAvailableSpellBookSlot(available_book_slot);
+		scribed_spells++;
+	}
+
+	if (scribed_spells > 0) {
+		SaveSpells();
+		const char* class_name = GetClassIDName(class_id);
+		Message(Chat::White, "You have learned %d %s spell%s!",
+			scribed_spells, class_name, scribed_spells == 1 ? "" : "s");
+	}
+}
+
+void Client::LearnDisciplinesForClass(uint8 class_id, uint8 min_level, uint8 max_level)
+{
+	auto available_discipline_slot = GetNextAvailableDisciplineSlot();
+	uint16 learned_disciplines = 0;
+
+	for (uint16 spell_id = 0; spell_id < SPDAT_RECORDS; ++spell_id) {
+		if (!IsValidSpell(spell_id)) {
+			continue;
+		}
+
+		if (!IsDiscipline(spell_id)) {
+			continue;
+		}
+
+		if (spells[spell_id].classes[Class::Warrior - 1] == 0) {
+			continue;
+		}
+
+		if (spells[spell_id].classes[class_id - 1] == 0) {
+			continue;
+		}
+
+		uint8 disc_level = spells[spell_id].classes[class_id - 1];
+		if (disc_level > max_level || disc_level < min_level) {
+			continue;
+		}
+
+		if (spells[spell_id].skill == EQ::skills::SkillTigerClaw) {
+			continue;
+		}
+
+		if (HasDisciplineLearned(spell_id)) {
+			continue;
+		}
+
+		if (RuleB(Spells, EnableSpellGlobals) && !SpellGlobalCheck(spell_id, CharacterID())) {
+			continue;
+		}
+		if (RuleB(Spells, EnableSpellBuckets) && !SpellBucketCheck(spell_id, CharacterID())) {
+			continue;
+		}
+
+		if (available_discipline_slot == -1) {
+			Message(Chat::Red, "Your discipline slots are full!");
+			break;
+		}
+
+		GetPP().disciplines.values[available_discipline_slot] = spell_id;
+		available_discipline_slot = GetNextAvailableDisciplineSlot(available_discipline_slot);
+		learned_disciplines++;
+	}
+
+	if (learned_disciplines > 0) {
+		SendDisciplineUpdate();
+		SaveDisciplines();
+		const char* class_name = GetClassIDName(class_id);
+		Message(Chat::White, "You have learned %d %s discipline%s!",
+			learned_disciplines, class_name, learned_disciplines == 1 ? "" : "s");
+	}
+}
+
+void Client::MaxSkillsForClass(uint8 class_id)
+{
+	uint8 current_level = GetLevel();
+
+	for (EQ::skills::SkillType skill_id = EQ::skills::Skill1HBlunt;
+		skill_id <= EQ::skills::HIGHEST_SKILL;
+		skill_id = static_cast<EQ::skills::SkillType>(skill_id + 1)) {
+
+		uint8 train_level = GetSkillTrainLevel(skill_id, class_id);
+		if (train_level == 0 || train_level > current_level) {
+			continue;
+		}
+
+		uint16 class_cap = SkillCaps::Instance()->GetSkillCap(class_id, skill_id, current_level).cap;
+		if (class_cap == 0) {
+			continue;
+		}
+
+		uint16 current_skill = GetRawSkill(skill_id);
+		if (class_cap > current_skill) {
+			SetSkill(skill_id, class_cap);
+		}
+	}
+}
+
+int64 Client::CalcMaxManaForClass(uint8 class_id)
+{
+	// TODO: Implement in Phase 6
+	return 0;
+}
+
+int64 Client::CalcMaxHPForClass(uint8 class_id)
+{
+	// TODO: Implement in Phase 6
+	return 0;
+}
+
+int64 Client::CalcMaxEnduranceForClass(uint8 class_id)
+{
+	// TODO: Implement in Phase 6
+	return 0;
+}
+
+// ============================================================================
+// END MULTICLASS SYSTEM IMPLEMENTATION
+// ============================================================================
+
+// ============================================================================
+// EdgeStat System - Send custom stats to client via opcode 0x1338
+// ============================================================================
+void Client::SendEdgeStats()
+{
+	if (!RuleB(MultiClass, MultiClassEnabled)) {
+		return;
+	}
+
+	std::vector<EdgeStatEntry_Struct> stats;
+	auto all_classes = GetAllClasses();
+	uint8 class_count = static_cast<uint8>(all_classes.size());
+
+	EdgeStatEntry_Struct entry;
+
+	// Always send class count
+	entry.statKey = eStatClassCount;
+	entry.statValue = class_count;
+	stats.push_back(entry);
+
+	// Send up to 3 class IDs and levels
+	if (all_classes.size() >= 1) {
+		entry.statKey = eStatClass1;
+		entry.statValue = all_classes[0];
+		stats.push_back(entry);
+
+		entry.statKey = eStatClass1Level;
+		entry.statValue = GetLevel();
+		stats.push_back(entry);
+	}
+
+	if (all_classes.size() >= 2) {
+		entry.statKey = eStatClass2;
+		entry.statValue = all_classes[1];
+		stats.push_back(entry);
+
+		entry.statKey = eStatClass2Level;
+		entry.statValue = GetLevel();
+		stats.push_back(entry);
+	}
+
+	if (all_classes.size() >= 3) {
+		entry.statKey = eStatClass3;
+		entry.statValue = all_classes[2];
+		stats.push_back(entry);
+
+		entry.statKey = eStatClass3Level;
+		entry.statValue = GetLevel();
+		stats.push_back(entry);
+	}
+
+	if (stats.empty()) {
+		return;
+	}
+
+	// Build the packet: header (4 bytes for count) + entries
+	uint32 num_entries = static_cast<uint32>(stats.size());
+	uint32 packet_size = sizeof(uint32) + (num_entries * sizeof(EdgeStatEntry_Struct));
+
+	auto outapp = new EQApplicationPacket(OP_Unknown, packet_size);
+	outapp->SetOpcodeBypass(0x1338);
+
+	// Write count
+	memcpy(outapp->pBuffer, &num_entries, sizeof(uint32));
+
+	// Write entries
+	memcpy(outapp->pBuffer + sizeof(uint32), stats.data(), num_entries * sizeof(EdgeStatEntry_Struct));
+
+	QueuePacket(outapp);
+	safe_delete(outapp);
+
+	LogInfo("Sent EdgeStats to client [{}]: [{}] entries, [{}] classes",
+		GetName(), num_entries, class_count);
+}
+

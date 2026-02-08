@@ -2380,6 +2380,48 @@ uint16 Lua_Client::ScribeSpells(uint8 min_level, uint8 max_level) {
 	return self->ScribeSpells(min_level, max_level);
 }
 
+// Multiclass System - Wrapper Functions
+bool Lua_Client::HasClass(uint8 class_id) {
+	Lua_Safe_Call_Bool();
+	return self->HasClass(class_id);
+}
+
+uint8 Lua_Client::GetClassCount() {
+	Lua_Safe_Call_Int();
+	return self->GetClassCount();
+}
+
+luabind::object Lua_Client::GetAllClasses(lua_State* L) {
+	Lua_Safe_Call_Class(luabind::object);
+	auto classes = self->GetAllClasses();
+	luabind::object lua_table = luabind::newtable(L);
+	int index = 1;
+	for (auto class_id : classes) {
+		lua_table[index++] = class_id;
+	}
+	return lua_table;
+}
+
+bool Lua_Client::AddMulticlass(uint8 class_id) {
+	Lua_Safe_Call_Bool();
+	return self->AddMulticlass(class_id);
+}
+
+void Lua_Client::ScribeSpellsForClass(uint8 class_id, uint8 min_level, uint8 max_level) {
+	Lua_Safe_Call_Void();
+	self->ScribeSpellsForClass(class_id, min_level, max_level);
+}
+
+void Lua_Client::LearnDisciplinesForClass(uint8 class_id, uint8 min_level, uint8 max_level) {
+	Lua_Safe_Call_Void();
+	self->LearnDisciplinesForClass(class_id, min_level, max_level);
+}
+
+void Lua_Client::MaxSkillsForClass(uint8 class_id) {
+	Lua_Safe_Call_Void();
+	self->MaxSkillsForClass(class_id);
+}
+
 uint16 Lua_Client::LearnDisciplines(uint8 min_level, uint8 max_level) {
 	Lua_Safe_Call_Int();
 	return self->LearnDisciplines(min_level, max_level);
@@ -3811,6 +3853,13 @@ luabind::scope lua_register_client() {
 	.def("GetCharacterFactionLevel", (int(Lua_Client::*)(int))&Lua_Client::GetCharacterFactionLevel)
 	.def("GetClassAbbreviation", (std::string(Lua_Client::*)(void))&Lua_Client::GetClassAbbreviation)
 	.def("GetClassBitmask", (uint16(Lua_Client::*)(void))&Lua_Client::GetClassBitmask)
+	.def("GetClassCount", (uint8(Lua_Client::*)(void))& Lua_Client::GetClassCount)
+	.def("GetAllClasses", (luabind::object(Lua_Client::*)(lua_State*))& Lua_Client::GetAllClasses)
+	.def("HasClass", (bool(Lua_Client::*)(uint8))& Lua_Client::HasClass)
+	.def("AddMulticlass", (bool(Lua_Client::*)(uint8))& Lua_Client::AddMulticlass)
+	.def("ScribeSpellsForClass", (void(Lua_Client::*)(uint8, uint8, uint8))& Lua_Client::ScribeSpellsForClass)
+	.def("LearnDisciplinesForClass", (void(Lua_Client::*)(uint8, uint8, uint8))& Lua_Client::LearnDisciplinesForClass)
+	.def("MaxSkillsForClass", (void(Lua_Client::*)(uint8))& Lua_Client::MaxSkillsForClass)
 	.def("GetClientMaxLevel", (int(Lua_Client::*)(void))&Lua_Client::GetClientMaxLevel)
 	.def("GetClientVersion", (int(Lua_Client::*)(void))&Lua_Client::GetClientVersion)
 	.def("GetClientVersionBit", (uint32(Lua_Client::*)(void))&Lua_Client::GetClientVersionBit)

@@ -1165,20 +1165,38 @@ void Client::OPMemorizeSpell(const EQApplicationPacket* app)
 		return;
 	}
 
-	if (
-		m->scribing != memSpellForget &&
-		(
-			!IsPlayerClass(GetClass()) ||
-			GetLevel() < spells[m->spell_id].classes[GetClass() - 1]
-		)
-	) {
-		MessageString(
-			Chat::Red,
-			SPELL_LEVEL_TO_LOW,
-			std::to_string(spells[m->spell_id].classes[GetClass() - 1]).c_str(),
-			spells[m->spell_id].name
-		);
-		return;
+	// Check if the player can use this spell with any of their classes (multiclass support)
+	if (m->scribing != memSpellForget) {
+		bool can_use_spell = false;
+		uint8 min_level_required = 255;
+		
+		// Get all classes (primary + multiclass)
+		std::vector<uint8> all_classes = GetAllClasses();
+		
+		// Check each class to see if they can use the spell
+		for (uint8 class_id : all_classes) {
+			if (IsPlayerClass(class_id)) {
+				uint8 spell_level = spells[m->spell_id].classes[class_id - 1];
+				if (spell_level <= GetLevel() && spell_level < 255) {
+					can_use_spell = true;
+					break;
+				}
+				// Track the minimum level required across all classes
+				if (spell_level < min_level_required) {
+					min_level_required = spell_level;
+				}
+			}
+		}
+		
+		if (!can_use_spell) {
+			MessageString(
+				Chat::Red,
+				SPELL_LEVEL_TO_LOW,
+				std::to_string(min_level_required).c_str(),
+				spells[m->spell_id].name
+			);
+			return;
+		}
 	}
 
 	switch (m->scribing) {

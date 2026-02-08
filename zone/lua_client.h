@@ -30,6 +30,7 @@ public:
 		return reinterpret_cast<Client*>(GetLuaPtrData());
 	}
 
+
 	void SendSound();
 	void Sit();
 	void Save();
@@ -211,6 +212,14 @@ public:
 	void ScribeSpell(int spell_id, int slot);
 	void ScribeSpell(int spell_id, int slot, bool update_client);
 	uint16 ScribeSpells(uint8 min_level, uint8 max_level);
+	// Multiclass System
+	bool HasClass(uint8 class_id);
+	uint8 GetClassCount();
+	luabind::object GetAllClasses(lua_State* L);
+	bool AddMulticlass(uint8 class_id);
+	void ScribeSpellsForClass(uint8 class_id, uint8 min_level, uint8 max_level);
+	void LearnDisciplinesForClass(uint8 class_id, uint8 min_level, uint8 max_level);
+	void MaxSkillsForClass(uint8 class_id);
 	void UnscribeSpell(int slot);
 	void UnscribeSpell(int slot, bool update_client);
 	void UnscribeSpellAll();

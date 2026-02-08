@@ -1178,6 +1178,15 @@ RULE_INT(EvolvingItems, DelayUponEquipping, 30000, "Delay in ms before an evolvi
 RULE_BOOL(EvolvingItems, DestroyAugmentsOnEvolve, false, "If this is enabled, any augments in an item will be destroyed when the item evolves. Otherwise, send augments to the player via the parcel system (requires that the Parcel System be enabled).")
 RULE_CATEGORY_END()
 
+RULE_CATEGORY(MultiClass)
+RULE_BOOL(MultiClass, MultiClassEnabled, true, "Enable the multiclass system allowing characters to have multiple classes")
+RULE_INT(MultiClass, MaxClasses, 2, "Maximum number of classes a character can have (including primary class)")
+RULE_INT(MultiClass, StatCalculation, 1, "How to calculate base stats from multiple classes: 1=highest, 2=average, 3=sum")
+RULE_INT(MultiClass, ManaCalculation, 1, "How to calculate mana pool from multiple classes: 1=highest, 2=sum, 3=weighted")
+RULE_INT(MultiClass, HitPointCalculation, 1, "How to calculate HP from multiple classes: 1=highest, 2=sum, 3=weighted")
+RULE_INT(MultiClass, EnduranceCalculation, 1, "How to calculate endurance from multiple classes: 1=highest, 2=sum, 3=weighted")
+RULE_CATEGORY_END()
+
 #undef RULE_CATEGORY
 #undef RULE_INT
 #undef RULE_REAL

@@ -56,6 +56,7 @@ namespace EQ
 #include "common/emu_constants.h"
 #include "common/emu_opcodes.h"
 #include "common/eq_packet_structs.h"
+#include "../common/edge_stats.h"
 #include "common/eq_packet.h"
 #include "common/eq_stream_intf.h"
 #include "common/events/player_events.h"
@@ -546,6 +547,21 @@ public:
 	inline uint8 GetLevel2() const { return m_pp.level2; }
 	inline uint16 GetBaseRace() const { return m_pp.race; }
 	inline uint16 GetBaseClass() const { return m_pp.class_; }
+	// Multiclass support methods
+	bool HasClass(uint8 class_id) const;
+	const std::vector<uint8>& GetMulticlassIDs() const { return m_multiclass_ids; }
+	std::vector<uint8> GetAllClasses() const;
+	uint8 GetClassCount() const;
+	bool AddMulticlass(uint8 class_id);
+	void LoadMulticlassData();
+	void SendEdgeStats();
+	// Multiclass-aware helper methods  
+	void ScribeSpellsForClass(uint8 class_id, uint8 min_level, uint8 max_level);
+	void LearnDisciplinesForClass(uint8 class_id, uint8 min_level, uint8 max_level);
+	void MaxSkillsForClass(uint8 class_id);
+	int64 CalcMaxManaForClass(uint8 class_id);
+	int64 CalcMaxHPForClass(uint8 class_id);
+	int64 CalcMaxEnduranceForClass(uint8 class_id);
 	inline uint8 GetBaseGender() const { return m_pp.gender; }
 	inline uint8 GetBaseFace() const { return m_pp.face; }
 	inline uint8 GetBaseHairColor() const { return m_pp.haircolor; }
@@ -942,7 +958,7 @@ public:
 	void ShowSkillsWindow();
 
 	uint16 MaxSkill(EQ::skills::SkillType skill_id, uint8 class_id, uint8 level) const;
-	inline uint16 MaxSkill(EQ::skills::SkillType skill_id) const { return MaxSkill(skill_id, GetClass(), GetLevel()); }
+	uint16 MaxSkill(EQ::skills::SkillType skill_id) const; // TGUE: multiclass-aware, checks all classes
 	uint8 GetSkillTrainLevel(EQ::skills::SkillType skill_id, uint8 class_id);
 	void MaxSkills();
 
@@ -2271,6 +2287,8 @@ private:
 
 	bool m_exp_enabled;
 
+	// Multiclass support - stores additional class IDs (primary class is in m_pp.class_)
+	std::vector<uint8> m_multiclass_ids;
 	std::vector<EXPModifier> m_exp_modifiers;
 	std::vector<PlayerTitlesetsRepository::PlayerTitlesets> m_player_title_sets;
 

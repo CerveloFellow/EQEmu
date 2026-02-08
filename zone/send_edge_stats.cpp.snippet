@@ -1,0 +1,76 @@
+
+// ============================================================================
+// EdgeStat System - Send custom stats to client via opcode 0x1338
+// ============================================================================
+void Client::SendEdgeStats()
+{
+	if (!RuleB(MultiClass, MultiClassEnabled)) {
+		return;
+	}
+
+	std::vector<EdgeStatEntry_Struct> stats;
+	auto all_classes = GetAllClasses();
+	uint8 class_count = static_cast<uint8>(all_classes.size());
+
+	EdgeStatEntry_Struct entry;
+
+	// Always send class count
+	entry.statKey = eStatClassCount;
+	entry.statValue = class_count;
+	stats.push_back(entry);
+
+	// Send up to 3 class IDs and levels
+	if (all_classes.size() >= 1) {
+		entry.statKey = eStatClass1;
+		entry.statValue = all_classes[0];
+		stats.push_back(entry);
+
+		entry.statKey = eStatClass1Level;
+		entry.statValue = GetLevel();
+		stats.push_back(entry);
+	}
+
+	if (all_classes.size() >= 2) {
+		entry.statKey = eStatClass2;
+		entry.statValue = all_classes[1];
+		stats.push_back(entry);
+
+		entry.statKey = eStatClass2Level;
+		entry.statValue = GetLevel();
+		stats.push_back(entry);
+	}
+
+	if (all_classes.size() >= 3) {
+		entry.statKey = eStatClass3;
+		entry.statValue = all_classes[2];
+		stats.push_back(entry);
+
+		entry.statKey = eStatClass3Level;
+		entry.statValue = GetLevel();
+		stats.push_back(entry);
+	}
+
+	if (stats.empty()) {
+		return;
+	}
+
+	// Build the packet: header (4 bytes for count) + entries
+	uint32 num_entries = static_cast<uint32>(stats.size());
+	uint32 packet_size = sizeof(uint32) + (num_entries * sizeof(EdgeStatEntry_Struct));
+
+	auto outapp = new EQApplicationPacket(OP_Unknown, packet_size);
+	outapp->SetOpcodeBypass(0x1338);
+
+	// Write count
+	memcpy(outapp->pBuffer, &num_entries, sizeof(uint32));
+
+	// Write entries
+	memcpy(outapp->pBuffer + sizeof(uint32), stats.data(), num_entries * sizeof(EdgeStatEntry_Struct));
+
+	QueuePacket(outapp);
+	safe_delete(outapp);
+
+	LogInfo("Sent EdgeStats to client [{}]: [{}] entries, [{}] classes",
+		GetName(), num_entries, class_count);
+}
+
