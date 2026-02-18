@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include <mutex>
+
 #include "common/loot.h"
 #include "common/repositories/character_corpses_repository.h"
 #include "zone/client.h"
@@ -212,6 +214,8 @@ public:
 	inline void Lock() { m_is_locked = true; }
 	inline void UnLock() { m_is_locked = false; }
 	inline bool IsLocked() { return m_is_locked; }
+	bool TryLootLock() { return m_loot_mutex.try_lock(); }
+	void LootUnlock() { m_loot_mutex.unlock(); }
 	inline void ResetLooter()
 	{
 		m_being_looted_by_entity_id = 0xFFFFFFFF;
@@ -287,4 +291,5 @@ private:
 	std::vector<std::string> m_consented_player_names;
 	LootRequestType          m_loot_request_type;
 	uint32                   m_account_id;
+	std::mutex               m_loot_mutex;
 };

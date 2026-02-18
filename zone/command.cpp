@@ -888,129 +888,177 @@ void command_lootcorpses(Client* c, const Seperator* sep)
 	int corpses_destroyed = 0;
 	bool inventory_full_warning = false;
 
-	// Get all corpses in the zone
-	std::list<Corpse*> corpse_list;
-	entity_list.GetCorpseList(corpse_list);
+	// Phase A: Build a work list of valid corpse entity IDs
+	struct CorpseEntry { uint16 entity_id; int retries; };
+	std::vector<CorpseEntry> work_list;
 
-	// Process each corpse
-	for (auto corpse : corpse_list) {
-		// Skip player corpses - only loot NPC corpses
-		if (corpse->IsPlayerCorpse()) {
-			continue;
-		}
+	{
+		std::list<Corpse*> corpse_list;
+		entity_list.GetCorpseList(corpse_list);
 
-		// Calculate distance
-		float dist_x = c->GetX() - corpse->GetX();
-		float dist_y = c->GetY() - corpse->GetY();
-		float dist_z = c->GetZ() - corpse->GetZ();
-		float horizontal_dist = std::sqrt(dist_x * dist_x + dist_y * dist_y);
-		float vertical_dist = std::abs(dist_z);
-
-		// Skip if not in range
-		if (horizontal_dist > radius || vertical_dist > zradius) {
-			continue;
-		}
-
-		// Skip if not allowed to loot this corpse
-		if (!corpse->CanPlayerLoot(c->CharacterID())) {
-			continue;
-		}
-
-		corpses_processed++;
-		bool ran_out_of_space_on_this_corpse = false;
-
-		// Loot coins first (always room for coins - they go to currency, not inventory)
-		uint32 copper = corpse->GetCopper();
-		uint32 silver = corpse->GetSilver();
-		uint32 gold = corpse->GetGold();
-		uint32 platinum = corpse->GetPlatinum();
-
-		if (copper || silver || gold || platinum) {
-			c->AddMoneyToPP(copper, silver, gold, platinum, true);
-			corpse->RemoveCash();
-			total_copper += copper;
-			total_silver += silver;
-			total_gold += gold;
-			total_platinum += platinum;
-		}
-
-		// Get the loot item list and iterate through it
-		// We need to make a copy of the list since we'll be modifying it
-		LootItems loot_list = corpse->GetLootItems();
-
-		for (auto loot_item : loot_list) {
-			if (!loot_item || loot_item->item_id == 0) {
+		for (auto corpse : corpse_list) {
+			// Skip player corpses - only loot NPC corpses
+			if (corpse->IsPlayerCorpse()) {
 				continue;
 			}
 
-			// Get item data from database
-			const EQ::ItemData* item_data = database.GetItem(loot_item->item_id);
-			if (!item_data) {
+			// Calculate distance
+			float dist_x = c->GetX() - corpse->GetX();
+			float dist_y = c->GetY() - corpse->GetY();
+			float dist_z = c->GetZ() - corpse->GetZ();
+			float horizontal_dist = std::sqrt(dist_x * dist_x + dist_y * dist_y);
+			float vertical_dist = std::abs(dist_z);
+
+			// Skip if not in range
+			if (horizontal_dist > radius || vertical_dist > zradius) {
 				continue;
 			}
 
-			// --- SKIP CHECKS ---
-
-			// Skip no-trade items unless flag is set
-			if (item_data->NoDrop == 0 && !loot_notrade) {
+			// Skip if not allowed to loot this corpse
+			if (!corpse->CanPlayerLoot(c->CharacterID())) {
 				continue;
 			}
 
-			// Skip lore items if player already has one
-			if (c->CheckLoreConflict(item_data)) {
+			work_list.push_back({ corpse->GetID(), 0 });
+		}
+	}
+
+	// Phase B: Process work list with per-corpse mutex locking to prevent duplication
+	const int MAX_RETRIES = 3;
+
+	while (!work_list.empty()) {
+		bool made_progress = false;
+		auto it = work_list.begin();
+
+		while (it != work_list.end()) {
+			// Re-lookup corpse by entity ID (handles destroyed corpses)
+			Corpse* corpse = entity_list.GetCorpseByID(it->entity_id);
+			if (!corpse) {
+				it = work_list.erase(it);
+				made_progress = true;
 				continue;
 			}
 
-			// Skip items that don't match the find pattern (if specified)
-			if (use_regex) {
-				if (!std::regex_search(item_data->Name, item_regex)) {
+			// Try to acquire the loot mutex
+			if (!corpse->TryLootLock()) {
+				it->retries++;
+				if (it->retries >= MAX_RETRIES) {
+					c->Message(Chat::Yellow, "Could not loot a corpse - it is being looted by another player.");
+					it = work_list.erase(it);
+					made_progress = true;
+				} else {
+					++it;
+				}
+				continue;
+			}
+
+			// === LOCKED: Loot the corpse ===
+			corpses_processed++;
+			bool ran_out_of_space_on_this_corpse = false;
+
+			// Loot coins first (always room for coins - they go to currency, not inventory)
+			uint32 copper = corpse->GetCopper();
+			uint32 silver = corpse->GetSilver();
+			uint32 gold = corpse->GetGold();
+			uint32 platinum = corpse->GetPlatinum();
+
+			if (copper || silver || gold || platinum) {
+				c->AddMoneyToPP(copper, silver, gold, platinum, true);
+				corpse->RemoveCash();
+				total_copper += copper;
+				total_silver += silver;
+				total_gold += gold;
+				total_platinum += platinum;
+			}
+
+			// Get the loot item list and iterate through it
+			// We need to make a copy of the list since we'll be modifying it
+			LootItems loot_list = corpse->GetLootItems();
+
+			for (auto loot_item : loot_list) {
+				if (!loot_item || loot_item->item_id == 0) {
 					continue;
 				}
+
+				// Get item data from database
+				const EQ::ItemData* item_data = database.GetItem(loot_item->item_id);
+				if (!item_data) {
+					continue;
+				}
+
+				// --- SKIP CHECKS ---
+
+				// Skip no-trade items unless flag is set
+				if (item_data->NoDrop == 0 && !loot_notrade) {
+					continue;
+				}
+
+				// Skip lore items if player already has one
+				if (c->CheckLoreConflict(item_data)) {
+					continue;
+				}
+
+				// Skip items that don't match the find pattern (if specified)
+				if (use_regex) {
+					if (!std::regex_search(item_data->Name, item_regex)) {
+						continue;
+					}
+				}
+
+				// --- CREATE ITEM AND TRANSFER ---
+				// Create item instance with all properties from corpse loot
+				EQ::ItemInstance* inst = database.CreateItem(
+					loot_item->item_id,
+					loot_item->charges,
+					loot_item->aug_1,
+					loot_item->aug_2,
+					loot_item->aug_3,
+					loot_item->aug_4,
+					loot_item->aug_5,
+					loot_item->aug_6,
+					loot_item->attuned,
+					loot_item->custom_data,
+					loot_item->ornamenticon,
+					loot_item->ornamentidfile,
+					loot_item->ornament_hero_model
+				);
+
+				if (!inst) {
+					continue;
+				}
+
+				// Try to put item in inventory (handles stacking automatically)
+				if (c->PutItemInInventoryWithStacking(inst)) {
+					// Successfully looted - remove from corpse
+					corpse->RemoveItem(loot_item);
+					total_items_looted++;
+				}
+				else {
+					// No space for this item
+					ran_out_of_space_on_this_corpse = true;
+					inventory_full_warning = true;
+				}
+
+				// Clean up the temporary instance
+				safe_delete(inst);
 			}
 
-			// --- CREATE ITEM AND TRANSFER ---
-			// Create item instance with all properties from corpse loot
-			EQ::ItemInstance* inst = database.CreateItem(
-				loot_item->item_id,
-				loot_item->charges,
-				loot_item->aug_1,
-				loot_item->aug_2,
-				loot_item->aug_3,
-				loot_item->aug_4,
-				loot_item->aug_5,
-				loot_item->aug_6,
-				loot_item->attuned,
-				loot_item->custom_data,
-				loot_item->ornamenticon,
-				loot_item->ornamentidfile,
-				loot_item->ornament_hero_model
-			);
-
-			if (!inst) {
-				continue;
+			// Corpse destruction logic:
+			// Only destroy if destroy flag is on AND we didn't run out of inventory space
+			if (destroy_corpses && !ran_out_of_space_on_this_corpse) {
+				corpse->DepopNPCCorpse();
+				corpses_destroyed++;
 			}
 
-			// Try to put item in inventory (handles stacking automatically)
-			if (c->PutItemInInventoryWithStacking(inst)) {
-				// Successfully looted - remove from corpse
-				corpse->RemoveItem(loot_item);
-				total_items_looted++;
-			}
-			else {
-				// No space for this item
-				ran_out_of_space_on_this_corpse = true;
-				inventory_full_warning = true;
-			}
+			corpse->LootUnlock();
 
-			// Clean up the temporary instance
-			safe_delete(inst);
+			it = work_list.erase(it);
+			made_progress = true;
 		}
 
-		// Corpse destruction logic:
-		// Only destroy if destroy flag is on AND we didn't run out of inventory space
-		if (destroy_corpses && !ran_out_of_space_on_this_corpse) {
-			corpse->DepopNPCCorpse();
-			corpses_destroyed++;
+		// Safety: if a full pass made no progress, bail out
+		if (!made_progress) {
+			break;
 		}
 	}
 
